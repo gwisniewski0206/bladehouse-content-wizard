@@ -118,6 +118,14 @@ img { max-width: 100%; }
 .linkbtn.plain { color: var(--ink); }
 .confirm.merge { border-color: var(--accent); }
 .dot.merged { background: var(--ok); border-color: var(--ok); }
+.qgroup { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.qadd { border: 0; background: none; color: var(--accent); font: inherit; font-size: 11px; letter-spacing: .04em; text-transform: none; padding: 2px 0; cursor: pointer; }
+.qadd:hover { text-decoration: underline; }
+.qitem em { font-style: normal; font-family: var(--mono); font-size: 10.5px; color: var(--accent); text-transform: uppercase; letter-spacing: .06em; }
+.dot.new { background: var(--accent); border-color: var(--accent); }
+.dot.unsaved { border-color: var(--accent); border-style: dashed; }
+.opt { font-weight: 400; color: var(--muted); }
+input[type=date] { width: 100%; font: inherit; color: var(--ink); background: var(--bg); border: 1px solid var(--line); padding: 10px 12px; border-radius: 0; }
 .who { font-family: var(--mono); font-size: 12px; color: var(--muted); display: flex; gap: 10px; align-items: center; }
 .who button { border: 0; background: none; color: var(--muted); text-decoration: underline; padding: 0; font: inherit; }
 </style>
@@ -142,7 +150,7 @@ img { max-width: 100%; }
   <header>
     <div class="brand"><h1>Bladehouse content wizard</h1><span class="count" id="count">Loading…</span></div>
     <div class="bar" id="bar" aria-hidden="true"></div>
-    <div class="brand"><p class="intro">One missing piece at a time. Fill in what you have and press <b>Save and next</b>. If an entry should not be on the website at all, remove it. Answers are saved for everyone straight away; the website itself changes only once Göran applies them.</p>
+    <div class="brand"><p class="intro">One missing piece at a time. Fill in what you have and press <b>Save and next</b>. If an entry should not be on the website at all, remove it. To add something new, use <b>+ Add</b> in the queue. Answers are saved for everyone straight away; the website itself changes only once Göran applies them.</p>
       <span class="who" id="who"></span></div>
   </header>
   <div class="grid">
@@ -163,7 +171,33 @@ img { max-width: 100%; }
   const SEED = JSON.parse(document.getElementById('seed').textContent);
   const NEED_LABEL = { poster: 'Poster', lineup: 'Lineup', link: 'Ticket / event link', buy: 'Buy links', read: 'Press links', cover: 'Cover', imprint: 'Imprint', profiles: 'Profile links' };
   const DISCARD_WORD = { event: 'event', vinyl: 'release', artist: 'artist' };
-  const items = SEED.items, artistNames = SEED.artists;
+  const BASE = SEED.items;
+  const NEW_KINDS = {
+    event: { group: 'Events', label: 'event', titleKey: 'name', needs: ['link', 'poster', 'lineup'], fields: [
+      { k: 'name', label: 'Event name', req: true, ph: 'Bladehouse at Golden Pudel' },
+      { k: 'date', label: 'Date', type: 'date', req: true },
+      { k: 'location', label: 'Venue and city', req: true, ph: 'Golden Pudel, Hamburg' },
+      { k: 'time', label: 'Start time', ph: '23:59' }] },
+    vinyl: { group: 'Vinyl releases', label: 'vinyl release', titleKey: 'title', needs: ['cover', 'buy', 'read'], uploads: ['cover'], fields: [
+      { k: 'title', label: 'Catalogue number', req: true, ph: 'BHO007' },
+      { k: 'release_date', label: 'Release date', type: 'date' },
+      { k: 'soundcloud', label: 'SoundCloud playlist link', type: 'url', ph: 'https://soundcloud.com/bladehouse/sets/…', hint: 'Used for the listening player on the website.' }] },
+    podcast: { group: 'Podcasts', label: 'podcast episode', titleKey: 'title', needs: ['artwork'], fields: [
+      { k: 'title', label: 'Episode title', req: true, ph: "Blade'n'Breakfast 055" },
+      { k: 'release_date', label: 'Publication date', type: 'date', req: true },
+      { k: 'soundcloud', label: 'SoundCloud episode link', type: 'url', req: true, ph: 'https://soundcloud.com/bladehouse/…' }] },
+    artist: { group: 'Artists', label: 'artist', titleKey: 'name', needs: ['profiles'], fields: [
+      { k: 'name', label: 'Artist name', req: true, ph: 'As it should appear in lineups' }] },
+  };
+  const GROUP_ORDER = ['Events', 'Vinyl releases', 'Digital releases', 'Podcasts', 'Imprint', 'Artists'];
+  let items = BASE, pendingNew = null;
+  const newItemFrom = (id, kind, v) => { const K = NEW_KINDS[kind]; return { id, kind, group: K.group, isNew: true, title: String(v[K.titleKey] || '').trim() || `New ${K.label}`, date: v.date || v.release_date || '', location: v.location || '', need: K.needs, discardable: true }; };
+  function rebuildItems() {
+    const extra = Object.values(responses).filter(r => String(r.id).startsWith('new:') && NEW_KINDS[r.kind]).map(r => newItemFrom(r.id, r.kind, r.values || {}));
+    if (pendingNew && !responses[pendingNew.id]) extra.push(pendingNew);
+    items = GROUP_ORDER.flatMap(g => [...extra.filter(x => x.group === g), ...BASE.filter(x => x.group === g)]);
+  }
+  const allArtistNames = () => [...new Set([...SEED.artists, ...items.filter(x => x.isNew && x.kind === 'artist' && responses[x.id]).map(x => x.title)])].sort((a, b) => a.localeCompare(b));
   let merging = false, token = null, who = '', responses = {}, shas = {}, blobCache = {}, currentId = null, draft = {}, openOnly = false, confirming = false, previews = {};
   const $ = s => document.querySelector(s);
   const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -202,7 +236,7 @@ img { max-width: 100%; }
       if (!blobCache[f.sha]) blobCache[f.sha] = JSON.parse(fromB64Utf8((await (await gh(`/git/blobs/${f.sha}`)).json()).content));
       const doc = blobCache[f.sha]; next[doc.id] = doc; nextShas[doc.id] = f.sha;
     }));
-    responses = next; shas = nextShas;
+    responses = next; shas = nextShas; rebuildItems();
   }
 
   async function putResponse(doc, retry = true) {
@@ -210,7 +244,7 @@ img { max-width: 100%; }
     if (shas[doc.id]) body.sha = shas[doc.id];
     try {
       const r = await (await gh(`/contents/${fileFor(doc.id)}`, { method: 'PUT', body: JSON.stringify(body) })).json();
-      shas[doc.id] = r.content.sha; blobCache[r.content.sha] = doc; responses[doc.id] = doc;
+      shas[doc.id] = r.content.sha; blobCache[r.content.sha] = doc; responses[doc.id] = doc; rebuildItems();
     } catch (e) {
       if (retry && (e.status === 409 || e.status === 422)) { await loadResponses(); return putResponse(doc, false); }
       throw e;
@@ -221,7 +255,7 @@ img { max-width: 100%; }
     if (!shas[id]) { delete responses[id]; return; }
     try { await gh(`/contents/${fileFor(id)}`, { method: 'DELETE', body: JSON.stringify({ message: `${who}: reopened — ${responses[id]?.title || id}`, sha: shas[id], branch: CFG.branch }) }); }
     catch (e) { if (retry && (e.status === 409 || e.status === 422)) { await loadResponses(); return deleteResponse(id, false); } if (e.status !== 404) throw e; }
-    delete responses[id]; delete shas[id];
+    delete responses[id]; delete shas[id]; rebuildItems();
   }
 
   async function loadPreview(path) {
@@ -233,15 +267,15 @@ img { max-width: 100%; }
 
   /* ---------- wizard ---------- */
   function nextId(fromId) {
-    const i = Math.max(0, items.findIndex(x => x.id === fromId));
-    const order = [...items.slice(i + 1), ...items.slice(0, i + 1)];
+    const i = Math.max(0, BASE.findIndex(x => x.id === fromId));
+    const order = [...BASE.slice(i + 1), ...BASE.slice(0, i + 1)];
     return (order.find(x => status(x) === 'open') || order.find(x => status(x) === 'skipped') || {}).id || null;
   }
 
   function renderHeader() {
-    const done = items.filter(resolved).length;
-    $('#count').textContent = `${done} of ${items.length} done`;
-    $('#bar').innerHTML = items.map(it => {
+    const done = BASE.filter(resolved).length;
+    $('#count').textContent = `${done} of ${BASE.length} done`;
+    $('#bar').innerHTML = BASE.map(it => {
       const s = status(it); const c = s === 'discarded' ? 'gone' : (s === 'saved' || s === 'none' || s === 'merged') ? 'done' : s === 'skipped' ? 'skip' : '';
       return `<span class="${c}${it.id === currentId ? ' here' : ''}"></span>`;
     }).join('');
@@ -249,12 +283,16 @@ img { max-width: 100%; }
   }
 
   function renderQueue() {
-    let html = '', group = '';
-    for (const it of items) {
-      if (openOnly && resolved(it) && it.id !== currentId) continue;
-      if (it.group !== group) { group = it.group; html += `<div class="qgroup">${esc(group)}</div>`; }
-      const s = status(it);
-      html += `<button class="qitem ${s}${it.id === currentId ? ' here' : ''}" data-id="${esc(it.id)}" type="button" title="${esc(it.title)}"><span class="dot ${s}"></span><span>${esc(it.title)}</span></button>`;
+    let html = '';
+    for (const g of GROUP_ORDER) {
+      const kind = Object.keys(NEW_KINDS).find(k => NEW_KINDS[k].group === g);
+      const list = items.filter(it => it.group === g && !(openOnly && !it.isNew && resolved(it) && it.id !== currentId));
+      if (!list.length && !kind) continue;
+      html += `<div class="qgroup"><span>${esc(g)}</span>${kind ? `<button type="button" class="qadd" data-add="${kind}">+ Add ${esc(NEW_KINDS[kind].label)}</button>` : ''}</div>`;
+      for (const it of list) {
+        const s = it.isNew ? (responses[it.id] ? 'new' : 'unsaved') : status(it);
+        html += `<button class="qitem ${s}${it.id === currentId ? ' here' : ''}" data-id="${esc(it.id)}" type="button" title="${esc(it.title)}"><span class="dot ${s}"></span><span>${it.isNew ? '<em>new</em> ' : ''}${esc(it.title)}</span></button>`;
+      }
     }
     $('#queue').innerHTML = html || '<div class="qgroup">Nothing open</div>';
     $('#queue').querySelector('.here')?.scrollIntoView({ block: 'nearest' });
@@ -262,13 +300,15 @@ img { max-width: 100%; }
 
   function fieldHtml(it, need) {
     const v = draft;
-    if (need === 'poster' || need === 'cover') {
+    if (need === 'poster' || need === 'cover' || need === 'artwork') {
       const f = v[need];
       let src = f?.local || (f?.path && previews[f.path]);
       if (f?.path && !f.local && !previews[f.path]) loadPreview(f.path);
       if (src === 'loading' || src === 'failed') src = '';
-      return `<div class="field"><span class="label">${need === 'poster' ? 'Poster' : 'Collection cover'}</span>
-        <p class="hint">${need === 'poster' ? 'The flyer or poster for this night: an image (JPG or PNG) or an animated poster as MP4. MP4s play silently and looped on the website, like a moving image.' : 'One shared cover image for HW01, HW02 and HW03.'}</p>
+      const label = { poster: 'Poster', cover: it.kind === 'cover' ? 'Collection cover' : 'Cover', artwork: 'Episode artwork' }[need];
+      const hint = { poster: 'The flyer or poster for this night: an image (JPG or PNG) or an animated poster as MP4. MP4s play silently and looped on the website, like a moving image.', cover: it.kind === 'cover' ? 'One shared cover image for HW01, HW02 and HW03.' : 'The record sleeve, square (JPG or PNG).', artwork: 'Square artwork (JPG or PNG). Leave it empty to use the artwork from SoundCloud.' }[need];
+      return `<div class="field"><span class="label">${label}${it.isNew && !(NEW_KINDS[it.kind].uploads || []).includes(need) ? ' <span class="opt">(optional)</span>' : ''}</span>
+        <p class="hint">${hint}</p>
         <div class="drop" data-drop="${need}">
           ${src ? (/\.(mp4|webm|mov)$/i.test(f.path || f.name || '') ? `<video src="${esc(src)}" muted loop autoplay playsinline aria-label="Uploaded ${need}"></video>` : `<img src="${esc(src)}" alt="Uploaded ${need}">`) : f?.name ? `<span class="current">Uploaded: ${esc(f.name)}</span>` : ''}
           <input type="file" accept="${need === 'poster' ? 'image/*,video/mp4,video/webm,video/quicktime' : 'image/*'}" id="file-${need}" aria-label="Choose ${need} image">
@@ -280,7 +320,7 @@ img { max-width: 100%; }
         <p class="hint">Add each artist. Names already on the site are suggested as you type; new names are fine too.</p>
         <div class="chips">${list.map((n, i) => `<span class="chip">${esc(n)}<button type="button" data-unchip="${i}" aria-label="Remove ${esc(n)}">×</button></span>`).join('')}</div>
         <div class="addrow"><input type="text" id="lineup-in" list="artist-list" placeholder="Artist name" autocomplete="off"><button class="btn quiet" type="button" id="lineup-add">Add</button></div>
-        <datalist id="artist-list">${artistNames.map(n => `<option value="${esc(n)}"></option>`).join('')}</datalist></div>`;
+        <datalist id="artist-list">${allArtistNames().map(n => `<option value="${esc(n)}"></option>`).join('')}</datalist></div>`;
     }
     if (need === 'link') return `<div class="field"><label for="f-link">Ticket or event page</label>
         <p class="hint">Resident Advisor, venue page or similar.</p>
@@ -315,6 +355,7 @@ img { max-width: 100%; }
   function renderCard(note = '', isErr = false) {
     const card = $('#card');
     const it = items.find(x => x.id === currentId);
+    if (it?.isNew) return renderNewCard(it, note, isErr);
     if (!it) {
       const left = items.filter(x => !resolved(x)).length;
       card.innerHTML = `<div class="empty"><h2>All done</h2>
@@ -339,7 +380,7 @@ img { max-width: 100%; }
           <div class="actions" style="border:0;padding:0"><button class="btn danger" type="button" data-act="discard-yes">Remove ${word}</button><button class="btn quiet" type="button" data-act="discard-no">Keep it</button></div></div>` : ''}
       ${merging ? `<div class="confirm merge" role="group" aria-label="Merge duplicate artist"><label for="merge-in"><b>${esc(it.title)}</b> is the same artist as:</label>
           <input type="text" id="merge-in" list="merge-list" placeholder="Correct artist name" autocomplete="off">
-          <datalist id="merge-list">${artistNames.filter(n => n !== it.title).map(n => `<option value="${esc(n)}"></option>`).join('')}</datalist>
+          <datalist id="merge-list">${allArtistNames().filter(n => n !== it.title).map(n => `<option value="${esc(n)}"></option>`).join('')}</datalist>
           <p class="hint">Their lineups move to that name and this entry is deleted.</p>
           <div class="actions" style="border:0;padding:0"><button class="btn primary" type="button" data-act="merge-yes">Merge</button><button class="btn quiet" type="button" data-act="merge-no">Cancel</button></div></div>` : ''}
       <div class="actions">
@@ -355,9 +396,38 @@ img { max-width: 100%; }
       <p class="note${isErr ? ' err' : ''}" id="note">${esc(note)}</p>`;
   }
 
+  const simpleField = f => `<div class="field"><label for="n-${f.k}">${esc(f.label)}${f.req ? '' : ' <span class="opt">(optional)</span>'}</label>
+      ${f.hint ? `<p class="hint">${esc(f.hint)}</p>` : ''}<input type="${f.type || 'text'}" id="n-${f.k}" data-k="${f.k}" placeholder="${esc(f.ph || '')}" value="${esc(draft[f.k] || '')}"></div>`;
+
+  function renderNewCard(it, note = '', isErr = false) {
+    const K = NEW_KINDS[it.kind], r = responses[it.id];
+    $('#card').innerHTML = `
+      <div>
+        <div class="eyebrow"><span>${esc(it.group)}</span><b>${r ? 'New entry' : `Add a ${esc(K.label)}`}</b></div>
+        <h2>${esc(r ? it.title : `New ${K.label}`)}</h2>
+        ${r?.by ? `<p class="meta">Added by ${esc(r.by)}</p>` : ''}
+      </div>
+      <form class="fields" id="form" novalidate>${K.fields.map(simpleField).join('')}${K.needs.map(n => fieldHtml(it, n)).join('')}</form>
+      ${confirming ? `<div class="confirm" role="alertdialog" aria-label="Confirm delete"><p>Delete this new ${esc(K.label)}? It will not be added to the website.</p>
+          <div class="actions" style="border:0;padding:0"><button class="btn danger" type="button" data-act="new-delete-yes">Delete</button><button class="btn quiet" type="button" data-act="discard-no">Keep it</button></div></div>` : ''}
+      <div class="actions">
+        <button class="btn primary" type="button" data-act="new-save">${r ? 'Save changes' : `Add ${esc(K.label)}`}</button>
+        ${r ? '' : '<button class="btn quiet" type="button" data-act="new-cancel">Cancel</button>'}
+        <span class="spacer"></span>
+        ${r && !confirming ? `<button class="linkbtn" type="button" data-act="new-delete">Delete this entry</button>` : ''}
+      </div>
+      <p class="note${isErr ? ' err' : ''}" id="note">${esc(note)}</p>`;
+  }
+
+  function startNew(kind) {
+    pendingNew = newItemFrom(`new:${kind}:${crypto.randomUUID()}`, kind, {});
+    rebuildItems(); go(pendingNew.id); $('#form input')?.focus();
+  }
+
   function renderAll(note, isErr) { renderHeader(); renderQueue(); renderCard(note, isErr); }
 
   function go(id) {
+    if (pendingNew && id !== pendingNew.id && !responses[pendingNew.id]) { pendingNew = null; rebuildItems(); }
     currentId = id; confirming = false; merging = false;
     draft = JSON.parse(JSON.stringify(responses[id]?.values || {}));
     renderAll();
@@ -377,7 +447,7 @@ img { max-width: 100%; }
 
   async function write(st, values) {
     const it = items.find(x => x.id === currentId);
-    const doc = { id: it.id, status: st, values: clean(values || {}), kind: it.kind, title: it.title, by: who, updatedAt: new Date().toISOString() };
+    const doc = { id: it.id, status: st, values: clean(values || {}), kind: it.kind, title: it.isNew ? newItemFrom(it.id, it.kind, values || {}).title : it.title, by: who, updatedAt: new Date().toISOString() };
     $('#card').classList.add('busy');
     try { await putResponse(doc); return true; }
     catch (e) { renderCard(`Could not save: ${e.message || 'the connection failed'}. Try again.`, true); return false; }
@@ -399,7 +469,7 @@ img { max-width: 100%; }
       const target = $('#merge-in').value.trim();
       if (!target) return $('#merge-in').focus();
       if (target === it.title) return renderCard('Pick a different name than this one.', true);
-      if (await write('merged', { mergeInto: target, mergeIntoKnown: artistNames.includes(target) })) go(nextId(it.id));
+      if (await write('merged', { mergeInto: target, mergeIntoKnown: allArtistNames().includes(target) })) go(nextId(it.id));
     }
     else if (a === 'discard') { readForm(); confirming = true; renderCard(); $('[data-act="discard-yes"]')?.focus(); }
     else if (a === 'discard-no') { confirming = false; renderCard(); }
@@ -409,6 +479,25 @@ img { max-width: 100%; }
       try { await deleteResponse(it.id); go(it.id); draft = kept; renderCard(); }
       catch (e) { renderCard(`Could not reopen: ${e.message || 'the connection failed'}.`, true); }
     } else if (a === 'next') go(nextId(it.id));
+    else if (a === 'new-save') {
+      readForm();
+      const K = NEW_KINDS[it.kind];
+      for (const f of K.fields) {
+        const v = draft[f.k] || '';
+        if (f.req && !v) return renderCard(`Please fill in “${f.label}”.`, true);
+        if (v && f.type === 'date' && !/^\d{4}-\d{2}-\d{2}$/.test(v)) return renderCard(`“${f.label}” needs a full date.`, true);
+        if (v && f.type === 'url' && !/^https:\/\/(www\.|m\.|on\.)?soundcloud\.com\//i.test(v)) return renderCard(`“${f.label}” should be a soundcloud.com link starting with https://`, true);
+      }
+      for (const u of K.uploads || []) if (!draft[u]?.path) return renderCard('Please upload the cover image first.', true);
+      for (const k of ['link', 'ra_link', 'soundcloud_link']) if (draft[k] && !/^https?:\/\//i.test(draft[k])) return renderCard(`That link should start with https:// — check "${draft[k]}".`, true);
+      if (await write('saved', draft)) { pendingNew = null; rebuildItems(); go(it.id); renderCard('Saved. It is now part of the content for the website.'); }
+    }
+    else if (a === 'new-cancel') { pendingNew = null; rebuildItems(); go(nextId(null)); }
+    else if (a === 'new-delete') { readForm(); confirming = true; renderCard(); }
+    else if (a === 'new-delete-yes') {
+      try { await deleteResponse(it.id); go(nextId(null)); }
+      catch (e) { renderCard(`Could not delete: ${e.message || 'the connection failed'}.`, true); }
+    }
   }
 
   async function upload(kind, file) {
@@ -435,13 +524,13 @@ img { max-width: 100%; }
     if (e.target.id === 'lineup-add') addArtist();
   });
   function addArtist() { const inp = $('#lineup-in'); const n = inp.value.trim(); if (!n) return; inp.value = ''; readForm(); draft.lineup = [...(draft.lineup || []), n]; renderCard(); $('#lineup-in')?.focus(); }
-  card.addEventListener('keydown', e => { if (e.target.id === 'lineup-in' && e.key === 'Enter') { e.preventDefault(); addArtist(); } else if (e.target.id === 'merge-in' && e.key === 'Enter') { e.preventDefault(); act('merge-yes'); } else if (e.target.matches('input[type=url],input[type=text],input[type=email]') && e.key === 'Enter') { e.preventDefault(); act('save'); } });
+  card.addEventListener('keydown', e => { if (e.target.id === 'lineup-in' && e.key === 'Enter') { e.preventDefault(); addArtist(); } else if (e.target.id === 'merge-in' && e.key === 'Enter') { e.preventDefault(); act('merge-yes'); } else if (e.target.matches('input[type=url],input[type=text],input[type=email],input[type=date]') && e.key === 'Enter') { e.preventDefault(); act(items.find(x => x.id === currentId)?.isNew ? 'new-save' : 'save'); } });
   card.addEventListener('change', e => { if (e.target.type === 'file') upload(e.target.closest('[data-drop]').dataset.drop, e.target.files[0]); });
   card.addEventListener('dragover', e => { const d = e.target.closest('.drop'); if (d) { e.preventDefault(); d.classList.add('over'); } });
   card.addEventListener('dragleave', e => e.target.closest('.drop')?.classList.remove('over'));
   card.addEventListener('drop', e => { const d = e.target.closest('.drop'); if (d) { e.preventDefault(); upload(d.dataset.drop, e.dataTransfer.files[0]); } });
   card.addEventListener('submit', e => e.preventDefault());
-  $('#queue').addEventListener('click', e => { const q = e.target.closest('[data-id]'); if (q) go(q.dataset.id); });
+  $('#queue').addEventListener('click', e => { const add = e.target.closest('[data-add]'); if (add) return startNew(add.dataset.add); const q = e.target.closest('[data-id]'); if (q) go(q.dataset.id); });
   $('#openOnly').addEventListener('change', e => { openOnly = e.target.checked; store.set('bh-open-only', openOnly ? '1' : null); renderQueue(); });
   openOnly = store.get('bh-open-only') === '1'; $('#openOnly').checked = openOnly;
   document.addEventListener('click', e => { if (e.target.id === 'signout') { store.set('bh-wizard-key', null); location.reload(); } });
@@ -457,7 +546,7 @@ img { max-width: 100%; }
       if (e.status === 401 || e.status === 403 || e.status === 404) { store.set('bh-wizard-key', null); $('#app').hidden = true; $('#gate').hidden = false; $('#g-note').className = 'note err'; $('#g-note').textContent = 'The wizard key no longer works. Ask Göran for the current password.'; return; }
       renderCard(`Could not load the answers: ${e.message}. Reload the page to try again.`, true);
     }
-    go(nextId(items[items.length - 1].id));
+    go(nextId(BASE[BASE.length - 1].id));
     setInterval(() => { if (!document.hidden) refresh(); }, 60000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
   }
