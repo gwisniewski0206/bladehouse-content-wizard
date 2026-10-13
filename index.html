@@ -61,7 +61,7 @@ input:focus-visible, textarea:focus-visible, button:focus-visible, .drop:focus-w
 
 .drop { border: 1.5px dashed var(--line); padding: 18px; display: grid; gap: 10px; justify-items: start; background: var(--bg); }
 .drop.over { border-color: var(--accent); }
-.drop img { max-height: 260px; width: auto; border: 1px solid var(--line); }
+.drop img, .drop video { max-height: 260px; max-width: 100%; width: auto; border: 1px solid var(--line); }
 .drop input[type=file] { font: inherit; font-size: 13px; max-width: 100%; }
 
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -264,10 +264,10 @@ img { max-width: 100%; }
       if (f?.path && !f.local && !previews[f.path]) loadPreview(f.path);
       if (src === 'loading' || src === 'failed') src = '';
       return `<div class="field"><span class="label">${need === 'poster' ? 'Poster' : 'Collection cover'}</span>
-        <p class="hint">${need === 'poster' ? 'The flyer or poster image for this night (JPG or PNG).' : 'One shared cover image for HW01, HW02 and HW03.'}</p>
+        <p class="hint">${need === 'poster' ? 'The flyer or poster for this night: an image (JPG or PNG) or an animated poster as MP4. MP4s play silently and looped on the website, like a moving image.' : 'One shared cover image for HW01, HW02 and HW03.'}</p>
         <div class="drop" data-drop="${need}">
-          ${src ? `<img src="${esc(src)}" alt="Uploaded ${need}">` : f?.name ? `<span class="current">Uploaded: ${esc(f.name)}</span>` : ''}
-          <input type="file" accept="image/*" id="file-${need}" aria-label="Choose ${need} image">
+          ${src ? (/\.(mp4|webm|mov)$/i.test(f.path || f.name || '') ? `<video src="${esc(src)}" muted loop autoplay playsinline aria-label="Uploaded ${need}"></video>` : `<img src="${esc(src)}" alt="Uploaded ${need}">`) : f?.name ? `<span class="current">Uploaded: ${esc(f.name)}</span>` : ''}
+          <input type="file" accept="${need === 'poster' ? 'image/*,video/mp4,video/webm,video/quicktime' : 'image/*'}" id="file-${need}" aria-label="Choose ${need} image">
         </div></div>`;
     }
     if (need === 'lineup') {
@@ -389,8 +389,9 @@ img { max-width: 100%; }
 
   async function upload(kind, file) {
     if (!file) return;
-    if (!file.type.startsWith('image/')) return renderCard('Please choose an image file (JPG or PNG).', true);
-    if (file.size > 25 * 1024 * 1024) return renderCard('That image is over 25 MB. Please use a smaller export.', true);
+    const isVid = /^video\/(mp4|webm|quicktime)$/.test(file.type);
+    if (!file.type.startsWith('image/') && !(isVid && kind === 'poster')) return renderCard(kind === 'poster' ? 'Please choose an image (JPG or PNG) or an MP4 video.' : 'Please choose an image file (JPG or PNG).', true);
+    if (file.size > 50 * 1024 * 1024) return renderCard('That file is over 50 MB. Please use a smaller export.', true);
     readForm();
     const note = $('#note'); if (note) { note.className = 'note'; note.textContent = `Uploading ${file.name}…`; }
     const ext = (file.name.match(/\.[A-Za-z0-9]+$/) || ['.' + file.type.split('/')[1]])[0].toLowerCase();
